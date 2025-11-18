@@ -1,0 +1,20 @@
+[project]
+name = "ragcite"
+version = "0.1.0"
+description = "A citationing toolkit for retrieval-augmented generation (RAG) systems."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "langdetect>=1.0.9",
+    "numpy>=2.2.6",
+    "openai>=2.8.1",
+    "rank-bm25>=0.2.2",
+    "tiktoken>=0.12.0",
+]
+
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
