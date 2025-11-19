@@ -20,6 +20,7 @@ class Ragcite:
     _bm25_engine: BaseBM25Engine
     _tokenizer: BaseTokenizer
     enable_same_language_semantics: bool
+    min_absolute_score: float
 
     def __init__(
         self,
@@ -29,6 +30,7 @@ class Ragcite:
         tokenizer: Optional[BaseTokenizer] = None,
         enable_embedding: bool = True,
         enable_same_language_semantics: bool = False,
+        min_absolute_score: float = 0.21,
     ) -> None:
         if not embedder and enable_embedding:
             self._embedder = OpenAIEmbedder()
@@ -44,19 +46,24 @@ class Ragcite:
         if not tokenizer:
             self._tokenizer = TiktokenTokenizer(encoding="cl100k_base")
 
+        # Initialize enable_same_language_semantics
+        self.enable_same_language_semantics = enable_same_language_semantics
+
         if enable_same_language_semantics and not enable_embedding:
             warnings.warn(
                 "enable_same_language_semantics is set to True but enable_embedding is False. "
                 "Setting enable_same_language_semantics to False."
             )
-            enable_same_language_semantics = False
+            self.enable_same_language_semantics = False
 
         if enable_same_language_semantics and not self._embedder:
             warnings.warn(
                 "enable_same_language_semantics is set to True but no embedder is provided. "
                 "Setting enable_same_language_semantics to False."
             )
-            enable_same_language_semantics = False
+            self.enable_same_language_semantics = False
+
+        self.min_absolute_score = min_absolute_score
 
     def _detect_cross_lingual(
         self, answer: str, context_chunks: dict[int, str]
@@ -139,23 +146,23 @@ class Ragcite:
 
         return similarities
 
-    def normalize_scores(self, scores: dict[int, float]) -> dict[int, float]:
-        """
-        Normalize scores to [0, 1] range
+    # def normalize_scores(self, scores: dict[int, float]) -> dict[int, float]:
+    #     """
+    #     Normalize scores to [0, 1] range
 
-        :param dict[int, float] scores: A dictionary mapping IDs to their scores.
-        :return: A dictionary mapping IDs to their normalized scores.
-        :rtype: dict[int, float]
-        """
-        score_values = list(scores.values())
-        min_score = min(score_values)
-        max_score = max(score_values)
-        if max_score - min_score == 0:
-            return {k: 0.0 for k in scores.keys()}
-        normalized = {
-            k: (v - min_score) / (max_score - min_score) for k, v in scores.items()
-        }
-        return normalized
+    #     :param dict[int, float] scores: A dictionary mapping IDs to their scores.
+    #     :return: A dictionary mapping IDs to their normalized scores.
+    #     :rtype: dict[int, float]
+    #     """
+    #     score_values = list(scores.values())
+    #     min_score = min(score_values)
+    #     max_score = max(score_values)
+    #     if max_score - min_score == 0:
+    #         return {k: 0.0 for k in scores.keys()}
+    #     normalized = {
+    #         k: (v - min_score) / (max_score - min_score) for k, v in scores.items()
+    #     }
+    #     return normalized
 
     def softmax_normalize(self, scores: dict[int, float]) -> dict[int, float]:
         """Normalize scores using softmax to create a probability distribution"""
@@ -175,8 +182,8 @@ class Ragcite:
         bm25_weight: float = 0.6,
     ) -> dict[int, float]:
         """Combine BM25 and embedding scores with weighted average"""
-        normalized_bm25 = self.normalize_scores(bm25_scores)
-        normalized_embedding = self.normalize_scores(embedding_scores)
+        normalized_bm25 = self.softmax_normalize(bm25_scores)
+        normalized_embedding = self.softmax_normalize(embedding_scores)
 
         combined = {
             i: bm25_weight * normalized_bm25[i]
@@ -207,13 +214,12 @@ class Ragcite:
             # Use semantic matching for cross-lingual cases, fallback to BM25 if embedder is not available
             try:
                 scores = self.compute_embedding_similarities(answer, context_chunks)
-                min_absolute_score = 0.3  # Lower threshold for embeddings
+            # Lower threshold for embeddings
             except ValueError:
                 warnings.warn(
                     "Cross-lingual case detected but embedder is not available. The results are likely to be suboptimal. Falling back to BM25 scoring."
                 )
                 scores = self.compute_bm25_scores(answer, context_chunks)
-                min_absolute_score = 0.5
         elif self.enable_same_language_semantics:
             # Use hybrid matching for same-language cases
             bm25_scores = self.compute_bm25_scores(answer, context_chunks)
@@ -223,20 +229,20 @@ class Ragcite:
             scores = self._combine_scores(
                 bm25_scores, embedding_scores, bm25_weight=0.6
             )
-            min_absolute_score = 0.4
         else:
             # Use lexical matching for same-language cases (BM25)
             scores = self.compute_bm25_scores(answer, context_chunks)
-            min_absolute_score = 0.5
 
-        normalized_scores = self.normalize_scores(scores)
+        normalized_scores = self.softmax_normalize(scores)
         sorted_scores = dict(
             sorted(normalized_scores.items(), key=lambda item: item[1], reverse=True)
         )
 
         threshold = elbow_method(list(sorted_scores.values()))
 
-        final_threshold = max(threshold, min_absolute_score)
+        print("Threshold from elbow method:", threshold)
+
+        final_threshold = max(threshold, self.min_absolute_score)
 
         selected_citations = {
             chunk_id: score
